@@ -19,6 +19,11 @@ use std::time::Instant;
 use anyhow::Context;
 use anyhow::Error;
 
+use env_logger::init as init_log;
+
+use log::debug;
+use log::error;
+
 use structopt::StructOpt;
 
 
@@ -90,13 +95,13 @@ fn watchdog(
           .map(|code| Cow::from(code.to_string()))
           .unwrap_or(Cow::from("N/A"));
 
-        eprintln!(
+        error!(
           "program {} exited with status {}",
           command.display(),
           status
         );
       },
-      Err(err) => eprintln!("failed to execute {}: {:#}", command.display(), err),
+      Err(err) => error!("failed to execute {}: {:#}", command.display(), err),
     };
 
     if spawned.elapsed() <= backoff_base {
@@ -105,15 +110,19 @@ fn watchdog(
       if backoff > backoff_max {
         backoff = backoff_max;
       }
+      debug!("using back off {:?}", backoff);
       sleep(backoff)
     } else {
       // Reset the backoff.
       backoff = backoff_base;
+      debug!("reset back off to {:?}", backoff);
     }
   }
 }
 
 fn main() -> ! {
+  init_log();
+
   let opts = Opts::from_args();
 
   watchdog(
