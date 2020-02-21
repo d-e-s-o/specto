@@ -4,6 +4,12 @@ version = "0.1.0"
 authors = ["Daniel Mueller <deso@posteo.net>"]
 edition = "2018"
 
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+incremental = false
+
 [features]
 color = ["env_logger/atty", "env_logger/termcolor"]
 
