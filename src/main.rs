@@ -1,10 +1,9 @@
-// Copyright (C) 2018-2020 Daniel Mueller <deso@posteo.net>
+// Copyright (C) 2018-2025 Daniel Mueller <deso@posteo.net>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! A watchdog for starting and restarting another program.
 
 use std::borrow::Cow;
-use std::ffi::OsStr;
 use std::ffi::OsString;
 use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
@@ -24,29 +23,28 @@ use env_logger::init as init_log;
 use log::debug;
 use log::error;
 
-use structopt::StructOpt;
+use clap::Parser;
 
 
-/// Arguments for the watchdog.
-#[derive(Debug, StructOpt)]
-struct Opts {
+/// A program for "watched" invocation of others.
+#[derive(Debug, Parser)]
+struct Args {
   /// The managed program's command.
   command: PathBuf,
   /// The managed program's arguments.
-  #[structopt(parse(from_os_str = OsStr::to_os_string))]
   arguments: Vec<OsString>,
   /// The backoff time in milliseconds to use initially.
   ///
   /// This value also acts as the minimum time the program needs to be
   /// alive in order to not increase the backoff.
-  #[structopt(long = "backoff-millis-base", default_value = "100")]
+  #[arg(long = "backoff-millis-base", default_value = "100")]
   backoff_millis_base: u64,
   /// The factor to multiply the current backoff with to get the next
   /// backoff.
-  #[structopt(long = "backoff-multiplier", default_value = "2.0")]
+  #[arg(long = "backoff-multiplier", default_value = "2.0")]
   backoff_muliplier: f64,
   /// The maximum backoff (in milliseconds) to use.
-  #[structopt(long = "backoff-max", default_value = "30000")]
+  #[arg(long = "backoff-max", default_value = "30000")]
   backoff_millis_max: u64,
 }
 
@@ -123,13 +121,13 @@ fn watchdog(
 fn main() -> ! {
   init_log();
 
-  let opts = Opts::from_args();
+  let args = Args::parse();
 
   watchdog(
-    &opts.command,
-    &opts.arguments,
-    Duration::from_millis(opts.backoff_millis_base),
-    opts.backoff_muliplier,
-    Duration::from_millis(opts.backoff_millis_max),
+    &args.command,
+    &args.arguments,
+    Duration::from_millis(args.backoff_millis_base),
+    args.backoff_muliplier,
+    Duration::from_millis(args.backoff_millis_max),
   );
 }

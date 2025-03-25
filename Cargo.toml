@@ -27,6 +27,6 @@ version = "0.7"
 default-features = false
 features = ["humantime"]
 
-[dependencies.structopt]
-version = "0.3"
-default-features = false
+[dependencies.clap]
+version = "4.4"
+features = ["derive"]
