@@ -52,12 +52,10 @@ struct Args {
 fn code(exit_status: &ExitStatus) -> Option<i32> {
   if let Some(code) = exit_status.code() {
     Some(code)
-  } else if let Some(code) = exit_status.signal() {
+  } else {
     // TODO: Unclear if that negation is correct or whether the
     //       result is already negative.
-    Some(-code)
-  } else {
-    None
+    exit_status.signal().map(|code| -code)
   }
 }
 
