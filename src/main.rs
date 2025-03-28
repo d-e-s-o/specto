@@ -69,7 +69,7 @@ struct Args {
   /// The factor to multiply the current backoff with to get the next
   /// backoff.
   #[arg(long = "backoff-multiplier", default_value = "2.0")]
-  backoff_muliplier: f64,
+  backoff_multiplier: f64,
   /// The maximum backoff to use.
   ///
   /// Accepted suffixes are 'ms' for milliseconds, 's' for seconds, and
@@ -108,7 +108,7 @@ fn watchdog(
   command: &Path,
   arguments: &[OsString],
   backoff_base: Duration,
-  backoff_muliplier: f64,
+  backoff_multiplier: f64,
   backoff_max: Duration,
 ) -> ! {
   let mut backoff = backoff_base;
@@ -131,7 +131,7 @@ fn watchdog(
     };
 
     if spawned.elapsed() <= backoff_base {
-      backoff = backoff.mul_f64(backoff_muliplier);
+      backoff = backoff.mul_f64(backoff_multiplier);
 
       if backoff > backoff_max {
         backoff = backoff_max;
@@ -155,7 +155,7 @@ fn main() -> ! {
     &args.command,
     &args.arguments,
     args.backoff_base,
-    args.backoff_muliplier,
+    args.backoff_multiplier,
     args.backoff_max,
   );
 }
