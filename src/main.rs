@@ -51,6 +51,7 @@ fn parse_duration(s: &str) -> Result<Duration, Error> {
 
 /// A program for "watched" invocation of others.
 #[derive(Debug, Parser)]
+#[clap(version = env!("VERSION"))]
 struct Args {
   /// The managed program's command.
   command: PathBuf,
