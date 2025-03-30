@@ -4,6 +4,7 @@
 //! A watchdog for starting and restarting another program.
 
 mod args;
+mod backoff;
 
 use std::borrow::Cow;
 use std::ffi::OsString;
@@ -13,7 +14,6 @@ use std::process::Command;
 use std::process::ExitStatus;
 use std::process::Stdio;
 use std::thread::sleep;
-use std::time::Duration;
 use std::time::Instant;
 
 use anyhow::Context;
@@ -27,6 +27,7 @@ use log::debug;
 use log::error;
 
 use crate::args::Args;
+use crate::backoff::Backoff;
 
 
 fn code(exit_status: &ExitStatus) -> Option<i32> {
@@ -54,14 +55,8 @@ fn execute(command: &Path, arguments: &[OsString]) -> Result<ExitStatus, Error> 
   child.wait().with_context(|| "failed to wait for child")
 }
 
-fn watchdog(
-  command: &Path,
-  arguments: &[OsString],
-  backoff_base: Duration,
-  backoff_multiplier: f64,
-  backoff_max: Duration,
-) -> ! {
-  let mut backoff = backoff_base;
+fn watchdog(command: &Path, arguments: &[OsString], backoff: Backoff) -> ! {
+  let mut backoff = backoff;
 
   loop {
     let spawned = Instant::now();
@@ -80,18 +75,9 @@ fn watchdog(
       Err(err) => error!("failed to execute {}: {:#}", command.display(), err),
     };
 
-    if spawned.elapsed() <= backoff_base {
-      backoff = backoff.mul_f64(backoff_multiplier);
-
-      if backoff > backoff_max {
-        backoff = backoff_max;
-      }
-      debug!("using back off {:?}", backoff);
-      sleep(backoff)
-    } else {
-      // Reset the backoff.
-      backoff = backoff_base;
-      debug!("reset back off to {:?}", backoff);
+    if let Some(delay) = backoff.next_delay(spawned, Instant::now()) {
+      debug!("using back off delay {:?}", delay);
+      let () = sleep(delay);
     }
   }
 }
@@ -100,12 +86,7 @@ fn main() -> ! {
   init_log();
 
   let args = Args::parse();
+  let backoff = Backoff::new(args.backoff_base, args.backoff_multiplier, args.backoff_max);
 
-  watchdog(
-    &args.command,
-    &args.arguments,
-    args.backoff_base,
-    args.backoff_multiplier,
-    args.backoff_max,
-  );
+  watchdog(&args.command, &args.arguments, backoff);
 }
