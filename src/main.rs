@@ -6,8 +6,9 @@
 mod args;
 mod backoff;
 
-use std::borrow::Cow;
+use std::ffi::OsStr;
 use std::ffi::OsString;
+use std::ops::Deref as _;
 use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
 use std::process::Command;
@@ -25,18 +26,53 @@ use env_logger::init as init_log;
 
 use log::debug;
 use log::error;
+use log::info;
 
 use crate::args::Args;
 use crate::backoff::Backoff;
 
 
-fn code(exit_status: &ExitStatus) -> Option<i32> {
-  if let Some(code) = exit_status.code() {
-    Some(code)
+/// Format a command with the given list of arguments as a string.
+fn format_command<C, A, S>(command: C, args: A) -> String
+where
+  C: AsRef<OsStr>,
+  A: IntoIterator<Item = S>,
+  S: AsRef<OsStr>,
+{
+  args.into_iter().fold(
+    command.as_ref().to_string_lossy().into_owned(),
+    |mut cmd, arg| {
+      cmd += " ";
+      cmd += arg.as_ref().to_string_lossy().deref();
+      cmd
+    },
+  )
+}
+
+
+fn evaluate_status<C, A, S>(status: ExitStatus, command: C, args: A)
+where
+  C: AsRef<OsStr>,
+  A: IntoIterator<Item = S>,
+  S: AsRef<OsStr>,
+{
+  let command = format_command(command, args);
+  if status.success() {
+    info!("`{command}` exited successfully");
   } else {
-    // TODO: Unclear if that negation is correct or whether the
-    //       result is already negative.
-    exit_status.signal().map(|code| -code)
+    let code = if let Some(code) = status.code() {
+      format!(" ({code})")
+    } else {
+      format!(
+        " (terminated by signal{})",
+        status
+          .signal()
+          .map(|num| format!(" {num}"))
+          .unwrap_or_default()
+      )
+    };
+
+    error!("`{command}` reported non-zero exit-status{code}");
   }
 }
 
@@ -61,17 +97,7 @@ fn watchdog(command: &Path, arguments: &[OsString], backoff: Backoff) -> ! {
   loop {
     let spawned = Instant::now();
     match execute(command, arguments) {
-      Ok(exit_status) => {
-        let status = code(&exit_status)
-          .map(|code| Cow::from(code.to_string()))
-          .unwrap_or(Cow::from("N/A"));
-
-        error!(
-          "program {} exited with status {}",
-          command.display(),
-          status
-        );
-      },
+      Ok(status) => evaluate_status(status, command, arguments),
       Err(err) => error!("failed to execute {}: {:#}", command.display(), err),
     };
 
