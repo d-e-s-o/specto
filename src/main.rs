@@ -5,20 +5,21 @@
 
 mod args;
 mod backoff;
+mod signal;
+mod util;
+mod watched;
 
 use std::ffi::OsStr;
 use std::ffi::OsString;
+use std::io::ErrorKind;
 use std::ops::Deref as _;
 use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
-use std::process::Command;
 use std::process::ExitStatus;
-use std::process::Stdio;
 use std::thread::sleep;
 use std::time::Instant;
 
 use anyhow::Context;
-use anyhow::Error;
 
 use clap::Parser as _;
 
@@ -28,8 +29,15 @@ use log::debug;
 use log::error;
 use log::info;
 
+use mio::Events;
+use mio::Interest;
+use mio::Poll;
+use mio::Token;
+
 use crate::args::Args;
 use crate::backoff::Backoff;
+use crate::signal::sigchld_events;
+use crate::watched::Watched;
 
 
 /// Format a command with the given list of arguments as a string.
@@ -77,29 +85,80 @@ where
 }
 
 
-fn execute(command: &Path, arguments: &[OsString]) -> Result<ExitStatus, Error> {
-  // A watchdog is for running non-interactive programs, so we close
-  // stdin.
-  let mut child = Command::new(command)
-    .args(arguments)
-    .stdin(Stdio::null())
-    .stdout(Stdio::inherit())
-    .stderr(Stdio::inherit())
-    .spawn()
-    .with_context(|| "failed to spawn child")?;
-
-  child.wait().with_context(|| "failed to wait for child")
-}
-
 fn watchdog(command: &Path, arguments: &[OsString], backoff: Backoff) -> ! {
   let mut backoff = backoff;
+  let mut poll = Poll::new().expect("failed to create poll instance");
+  let mut events = Events::with_capacity(16);
+
+  let mut sigchld_events = sigchld_events().expect("failed to register SIGCHLD handler");
+  let sigchld_token = Token(0);
+
+  let () = poll
+    .registry()
+    .register(&mut sigchld_events, sigchld_token, Interest::READABLE)
+    .expect("failed to register poll for SIGCHLD events");
 
   loop {
     let spawned = Instant::now();
-    match execute(command, arguments) {
-      Ok(status) => evaluate_status(status, command, arguments),
-      Err(err) => error!("failed to execute {}: {:#}", command.display(), err),
-    };
+
+    match Watched::new(command, arguments) {
+      Ok(mut watched) => {
+        'poll: loop {
+          match poll.poll(&mut events, None) {
+            Ok(()) => {
+              for event in events.iter() {
+                match event.token() {
+                  token if token == sigchld_token => {
+                    match watched.try_wait() {
+                      Ok(Some(status)) => {
+                        let () = evaluate_status(status, command, arguments);
+                        break 'poll
+                      },
+                      Ok(None) => {
+                        // Apparently the child is not yet ready? I
+                        // guess we just continue then. It's
+                        // questionable whether this is a reachable
+                        // path.
+                      },
+                      Err(err) if err.raw_os_error() == Some(libc::ECHILD) => {
+                        // We should only see this error if the child
+                        // somehow died without us noticing, which
+                        // should not be possible. Yet, in the spirit of
+                        // being as fault tolerant as possible, just
+                        // continue with a restart.
+                        break 'poll
+                      },
+                      Err(err) => {
+                        // SANITY: We should not hit this case, as the
+                        //         remaining conditions for the
+                        //         underlying waitpid system call to
+                        //         fail are all related to faulty
+                        //         inputs.
+                        Err(err)
+                          .context("failed to wait for watched process")
+                          .unwrap()
+                      },
+                    }
+                  },
+                  _ => unreachable!(),
+                }
+              }
+            },
+            Err(err) if err.kind() == ErrorKind::Interrupted => continue,
+            Err(err) => {
+              // SANITY: We should not hit this case, as the remaining
+              //         conditions for the underlying epoll_wait system
+              //         call to fail are all related to faulty inputs.
+              Err(err).context("failed to poll events").unwrap()
+            },
+          }
+        }
+      },
+      Err(err) => error!(
+        "failed to execute `{}`: {err:?}",
+        format_command(command, arguments)
+      ),
+    }
 
     if let Some(delay) = backoff.next_delay(spawned, Instant::now()) {
       debug!("using back off delay {:?}", delay);
