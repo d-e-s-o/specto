@@ -13,6 +13,11 @@ use std::process::Stdio;
 use anyhow::Context as _;
 use anyhow::Result;
 
+use libc::kill;
+use libc::SIGTERM;
+
+use crate::util::check;
+
 
 #[derive(Debug)]
 pub(crate) struct Watched {
@@ -47,5 +52,20 @@ impl Watched {
         Err(err) => break Err(err),
       }
     }
+  }
+
+  pub fn terminate(&self) -> Result<()> {
+    // TODO: Ideally this would be PidFd based.
+    let pid = self.child.id();
+    let pid = pid
+      .try_into()
+      .with_context(|| format!("failed to convert PID {pid} into required type"))?;
+    let result = unsafe { kill(pid, SIGTERM) };
+    let () = check(result, -1).with_context(|| format!("failed to send SIGTERM to {pid}"))?;
+    Ok(())
+  }
+
+  pub fn kill(mut self) -> io::Result<()> {
+    self.child.kill()
   }
 }

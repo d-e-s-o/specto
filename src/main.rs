@@ -37,6 +37,7 @@ use mio::Token;
 use crate::args::Args;
 use crate::backoff::Backoff;
 use crate::signal::sigchld_events;
+use crate::signal::sigint_events;
 use crate::watched::Watched;
 
 
@@ -85,18 +86,26 @@ where
 }
 
 
-fn watchdog(command: &Path, arguments: &[OsString], backoff: Backoff) -> ! {
+fn watchdog(command: &Path, arguments: &[OsString], backoff: Backoff) {
   let mut backoff = backoff;
   let mut poll = Poll::new().expect("failed to create poll instance");
   let mut events = Events::with_capacity(16);
 
+  let mut sigint_events = sigint_events().expect("failed to register SIGINT handler");
+  let sigint_token = Token(0);
   let mut sigchld_events = sigchld_events().expect("failed to register SIGCHLD handler");
-  let sigchld_token = Token(0);
+  let sigchld_token = Token(1);
 
+  let () = poll
+    .registry()
+    .register(&mut sigint_events, sigint_token, Interest::READABLE)
+    .expect("failed to register poll for SIGINT events");
   let () = poll
     .registry()
     .register(&mut sigchld_events, sigchld_token, Interest::READABLE)
     .expect("failed to register poll for SIGCHLD events");
+
+  let mut should_exit = false;
 
   loop {
     let spawned = Instant::now();
@@ -108,6 +117,25 @@ fn watchdog(command: &Path, arguments: &[OsString], backoff: Backoff) -> ! {
             Ok(()) => {
               for event in events.iter() {
                 match event.token() {
+                  token if token == sigint_token => {
+                    // The first request to terminate causes us to ask
+                    // the child to terminate gracefully and after that
+                    // we force-kill it.
+                    if !should_exit {
+                      if let Err(err) = watched.terminate() {
+                        error!("failed to terminate child process gracefully: {err:?}");
+                      } else {
+                        should_exit = true;
+                        continue 'poll
+                      }
+                    }
+
+                    info!("forcefully killing child process");
+                    if let Err(err) = watched.kill() {
+                      error!("failed to kill child process: {err:?}");
+                    }
+                    return
+                  },
                   token if token == sigchld_token => {
                     match watched.try_wait() {
                       Ok(Some(status)) => {
@@ -160,18 +188,24 @@ fn watchdog(command: &Path, arguments: &[OsString], backoff: Backoff) -> ! {
       ),
     }
 
+    if should_exit {
+      return
+    }
+
     if let Some(delay) = backoff.next_delay(spawned, Instant::now()) {
       debug!("using back off delay {:?}", delay);
+      // TODO: This sleep isn't actually interruptible by Ctrl-C, so we
+      //       may end up unintentionally delaying termination.
       let () = sleep(delay);
     }
   }
 }
 
-fn main() -> ! {
+fn main() {
   init_log();
 
   let args = Args::parse();
   let backoff = Backoff::new(args.backoff_base, args.backoff_multiplier, args.backoff_max);
 
-  watchdog(&args.command, &args.arguments, backoff);
+  watchdog(&args.command, &args.arguments, backoff)
 }
