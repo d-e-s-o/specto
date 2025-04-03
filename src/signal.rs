@@ -15,6 +15,7 @@ use libc::size_t;
 use libc::write;
 use libc::SIGCHLD;
 use libc::SIGINT;
+use libc::SIGTERM;
 use libc::SIG_ERR;
 
 use mio::unix::pipe;
@@ -22,6 +23,8 @@ use mio::unix::pipe;
 use crate::util::check;
 
 
+/// The file descriptor used for signaling `SIGTERM` events.
+static SIGTERM_FD: SignalFd = SignalFd::uninit();
 /// The file descriptor used for signaling `SIGINT` events.
 static SIGINT_FD: SignalFd = SignalFd::uninit();
 /// The file descriptor used for signaling `SIGCHLD` events.
@@ -60,6 +63,22 @@ impl SignalFd {
     let result = unsafe { write(fd, buffer.as_ptr() as *const _, buffer.len()) };
     check(result, -1).unwrap();
   }
+}
+
+
+/// A signal handler for `SIGTERM`.
+extern "C" fn sigterm_handler(signum: c_int) {
+  debug_assert!([SIGTERM].contains(&signum));
+  let () = SIGTERM_FD.signal();
+}
+
+/// Register a signal handler for `SIGTERM`.
+pub(crate) fn sigterm_events() -> Result<pipe::Receiver> {
+  let (sender, receiver) = pipe::new().context("failed to create pipe for SIGTERM signals")?;
+  let () = SIGTERM_FD.set_sender(sender);
+  let rc = unsafe { signal(SIGTERM, sigterm_handler as size_t) };
+  let () = check(rc, SIG_ERR).context("failed to register SIGTERM handler")?;
+  Ok(receiver)
 }
 
 

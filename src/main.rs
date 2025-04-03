@@ -17,6 +17,7 @@ use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
 use std::process::ExitStatus;
 use std::thread::sleep;
+use std::time::Duration;
 use std::time::Instant;
 
 use anyhow::Context;
@@ -38,6 +39,7 @@ use crate::args::Args;
 use crate::backoff::Backoff;
 use crate::signal::sigchld_events;
 use crate::signal::sigint_events;
+use crate::signal::sigterm_events;
 use crate::watched::Watched;
 
 
@@ -86,16 +88,30 @@ where
 }
 
 
+fn kill_child_now(watched: Watched) {
+  info!("forcefully killing child process");
+  if let Err(err) = watched.kill() {
+    error!("failed to kill child process: {err:?}");
+  }
+}
+
+
 fn watchdog(command: &Path, arguments: &[OsString], backoff: Backoff) {
   let mut backoff = backoff;
   let mut poll = Poll::new().expect("failed to create poll instance");
   let mut events = Events::with_capacity(16);
 
+  let mut sigterm_events = sigterm_events().expect("failed to register SIGTERM handler");
+  let sigterm_token = Token(0);
   let mut sigint_events = sigint_events().expect("failed to register SIGINT handler");
-  let sigint_token = Token(0);
+  let sigint_token = Token(1);
   let mut sigchld_events = sigchld_events().expect("failed to register SIGCHLD handler");
-  let sigchld_token = Token(1);
+  let sigchld_token = Token(2);
 
+  let () = poll
+    .registry()
+    .register(&mut sigterm_events, sigterm_token, Interest::READABLE)
+    .expect("failed to register poll for SIGTERM events");
   let () = poll
     .registry()
     .register(&mut sigint_events, sigint_token, Interest::READABLE)
@@ -105,6 +121,7 @@ fn watchdog(command: &Path, arguments: &[OsString], backoff: Backoff) {
     .register(&mut sigchld_events, sigchld_token, Interest::READABLE)
     .expect("failed to register poll for SIGCHLD events");
 
+  let mut timeout = None;
   let mut should_exit = false;
 
   loop {
@@ -113,10 +130,18 @@ fn watchdog(command: &Path, arguments: &[OsString], backoff: Backoff) {
     match Watched::new(command, arguments) {
       Ok(mut watched) => {
         'poll: loop {
-          match poll.poll(&mut events, None) {
+          match poll.poll(&mut events, timeout) {
             Ok(()) => {
               for event in events.iter() {
                 match event.token() {
+                  token if token == sigterm_token => {
+                    if should_exit {
+                      return kill_child_now(watched)
+                    }
+                    should_exit = true;
+                    timeout = Some(Duration::from_millis(500));
+                    continue 'poll
+                  },
                   token if token == sigint_token => {
                     // The first request to terminate causes us to ask
                     // the child to terminate gracefully and after that
@@ -129,12 +154,7 @@ fn watchdog(command: &Path, arguments: &[OsString], backoff: Backoff) {
                         continue 'poll
                       }
                     }
-
-                    info!("forcefully killing child process");
-                    if let Err(err) = watched.kill() {
-                      error!("failed to kill child process: {err:?}");
-                    }
-                    return
+                    return kill_child_now(watched)
                   },
                   token if token == sigchld_token => {
                     match watched.try_wait() {
@@ -170,6 +190,14 @@ fn watchdog(command: &Path, arguments: &[OsString], backoff: Backoff) {
                   },
                   _ => unreachable!(),
                 }
+              }
+
+              // Attempt to detect a poll timeout, which should be
+              // signaled with a successful return. We do that after
+              // draining any otherwise outstanding events.
+              if timeout.is_some() {
+                debug_assert!(should_exit);
+                return kill_child_now(watched)
               }
             },
             Err(err) if err.kind() == ErrorKind::Interrupted => continue,
