@@ -11,6 +11,7 @@ mod watched;
 
 use std::ffi::OsStr;
 use std::io::ErrorKind;
+use std::mem::forget;
 use std::mem::replace;
 use std::ops::BitOr;
 use std::ops::BitOrAssign;
@@ -429,6 +430,14 @@ fn run(mut watchdog: Watchdog<'_>) {
     .registry()
     .register(&mut sigchld_events, sigchld_token, Interest::READABLE)
     .expect("failed to register poll for SIGCHLD events");
+
+  // Forget our fixed pipe read ends here so that they won't get
+  // dropped. If we exit below loop we are going to terminate anyway,
+  // and we do not want the write ends to potentially panic in a signal
+  // handler.
+  forget(sigterm_events);
+  forget(sigint_events);
+  forget(sigchld_events);
 
   let mut timeout = None;
   loop {
