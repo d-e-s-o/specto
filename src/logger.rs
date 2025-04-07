@@ -7,6 +7,7 @@ use std::io::stderr;
 use std::mem::MaybeUninit;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::PoisonError;
 use std::time::SystemTime;
 
 use anyhow::Result;
@@ -89,7 +90,7 @@ impl Log for Logger {
       let () = write!(&mut writer, " {}] {}", record.target(), record.args())?;
 
       if let Some(rotate) = &logger.rotate {
-        let mut rotate = rotate.lock().unwrap_or_else(|err| err.into_inner());
+        let mut rotate = rotate.lock().unwrap_or_else(PoisonError::into_inner);
         let () = rotate.forward(&mut writer.written())?;
         let () = rotate.forward(&mut b"\n".as_slice())?;
       } else {

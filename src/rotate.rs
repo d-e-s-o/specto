@@ -182,7 +182,7 @@ impl RotateInner {
 
         let mut dst = self.path.clone();
         if i != 0 {
-          let () = dst.push(format!("{:digits$}", i));
+          let () = dst.push(format!("{i:digits$}"));
         }
 
         if let Err(err) = rename(&src, &dst) {
@@ -200,7 +200,7 @@ impl RotateInner {
     for i in (0..self.max_files).rev() {
       let mut src = self.path.clone();
       if i != 0 {
-        let () = src.as_mut_os_string().push(format!(".{:digits$}", i));
+        let () = src.as_mut_os_string().push(format!(".{i:digits$}"));
       }
 
       let mut dst = self.path.clone();

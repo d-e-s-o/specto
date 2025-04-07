@@ -1,6 +1,8 @@
 // Copyright (C) 2025 Daniel Mueller (deso@posteo.net)
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+//! Build script for specto.
+
 use anyhow::Result;
 
 use grev::git_revision_auto;

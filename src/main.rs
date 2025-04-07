@@ -24,6 +24,7 @@ use std::os::unix::process::ExitStatusExt;
 use std::process::ExitStatus;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::PoisonError;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -236,7 +237,7 @@ impl<'args> Watchdog<'args> {
   fn try_restart(&mut self, spawned: Instant, now: Instant) -> Action {
     let delay = self.backoff.next_delay(spawned, now);
     if let Some(delay_) = delay {
-      debug!("using back off delay {:?}", delay_);
+      debug!("using back off delay {delay_:?}");
       self.state = State::BackingOff(BackingOff {
         until: now + delay_,
       });
@@ -431,7 +432,7 @@ impl<'args> Watchdog<'args> {
     if let Some(rotate) = &mut self.rotate {
       let result = rotate
         .lock()
-        .unwrap_or_else(|err| err.into_inner())
+        .unwrap_or_else(PoisonError::into_inner)
         .forward(stream);
       if let Err(err) = result {
         warn!("failed to forward stdio stream output: {err:#}");

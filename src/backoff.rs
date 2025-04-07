@@ -54,12 +54,12 @@ mod tests {
     let mut backoff = Backoff::new(base, multiplier, max);
 
     let now = Instant::now();
-    let prev = now - Duration::from_secs(2);
+    let prev = now.checked_sub(Duration::from_secs(2)).unwrap();
     // The previous "event" is further than `base` in the past, so there
     // should be no backoff.
     assert_eq!(backoff.next_delay(prev, now), None);
 
-    let prev = now - Duration::from_millis(500);
+    let prev = now.checked_sub(Duration::from_millis(500)).unwrap();
     let delay = backoff.next_delay(prev, now).unwrap();
     assert_eq!(delay, base);
 
@@ -81,10 +81,10 @@ mod tests {
     let delay = backoff.next_delay(prev, now).unwrap();
     assert_eq!(delay, max);
 
-    let prev = now - Duration::from_secs(2);
+    let prev = now.checked_sub(Duration::from_secs(2)).unwrap();
     assert_eq!(backoff.next_delay(prev, now), None);
 
-    let prev = now - Duration::from_millis(500);
+    let prev = now.checked_sub(Duration::from_millis(500)).unwrap();
     let delay = backoff.next_delay(prev, now).unwrap();
     assert_eq!(delay, base);
   }
