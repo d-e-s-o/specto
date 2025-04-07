@@ -24,3 +24,6 @@ env_logger = { version = "0.7", default-features = false, features = ["humantime
 libc = { version = "0.2" }
 log = { version = "0.4", default-features = false }
 mio = { version = "1.0", default-features = false, features = ["os-poll", "os-ext"] }
+
+[dev-dependencies]
+tempfile = { version = "3.0" }

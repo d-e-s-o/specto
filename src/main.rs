@@ -5,6 +5,7 @@
 
 mod args;
 mod backoff;
+mod rotate;
 mod signal;
 mod util;
 mod watched;
