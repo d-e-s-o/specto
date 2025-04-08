@@ -3,12 +3,15 @@
 
 use std::ffi::OsString;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::anyhow;
 use anyhow::Error;
 
 use clap::Parser;
+
+use crate::watched::Streams;
 
 
 /// Parse a duration from a string.
@@ -30,6 +33,20 @@ fn parse_duration(s: &str) -> Result<Duration, Error> {
   }
 
   Err(anyhow!("invalid duration provided: {}", s))
+}
+
+
+impl FromStr for Streams {
+  type Err = String;
+
+  fn from_str(s: &str) -> Result<Self, Self::Err> {
+    match s {
+      "stdout" => Ok(Self::Stdout),
+      "stderr" => Ok(Self::Stderr),
+      "both" => Ok(Self::Both),
+      _ => Err(format!("invalid stream specifier: {s}")),
+    }
+  }
 }
 
 
@@ -60,6 +77,24 @@ pub(crate) struct Args {
   /// 'm' for minutes.
   #[arg(long = "backoff-max", value_parser = parse_duration, default_value = "30s")]
   pub backoff_max: Duration,
+  /// The log file to redirect the watched process' output to.
+  ///
+  /// Setting this option also enables log rotation.
+  #[arg(long = "log-file")]
+  pub log_file: Option<PathBuf>,
+  /// The file to redirect the watched process' stderr to.
+  ///
+  /// Setting this option also enables log rotation.
+  #[arg(long = "log-streams", requires = "log_file")]
+  pub log_streams: Option<Streams>,
+  /// The approximate maximum number of lines in a log file before
+  /// rotation happens.
+  #[arg(long = "max-log-lines", requires = "log_file")]
+  pub max_log_lines: Option<usize>,
+  /// The maximum total number of log files (current and "archived") to
+  /// keep.
+  #[arg(long = "max-log-files", requires = "log_file")]
+  pub max_log_files: Option<usize>,
 }
 
 

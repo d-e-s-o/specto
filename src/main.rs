@@ -33,6 +33,7 @@ use log::debug;
 use log::error;
 use log::warn;
 
+use mio::unix::pipe::Receiver;
 use mio::Events;
 use mio::Interest;
 use mio::Poll;
@@ -43,6 +44,7 @@ use crate::backoff::Backoff;
 use crate::signal::sigchld_events;
 use crate::signal::sigint_events;
 use crate::signal::sigterm_events;
+use crate::watched::PollData;
 use crate::watched::Watched;
 
 
@@ -237,7 +239,12 @@ impl<'args> Watchdog<'args> {
     debug!("starting process `{formatted}`");
 
     let spawned = Instant::now();
-    let watched = Watched::new(&args.command, &args.arguments)
+    let watched = Watched::builder()
+      .set_log_file(args.log_file.as_deref())
+      .set_log_streams(args.log_streams)
+      .set_max_log_lines(args.max_log_lines)
+      .set_max_log_files(args.max_log_files)
+      .build(&args.command, &args.arguments)
       .with_context(|| format!("failed to execute `{formatted}`"))?;
     let running = Running { spawned, watched };
     Ok(running)
@@ -405,6 +412,28 @@ impl<'args> Watchdog<'args> {
       State::Undefined => unreachable!(),
     }
   }
+
+  fn on_stream_ready(&mut self, stream: &mut Receiver) {
+    match &mut self.state {
+      State::Running(Running { watched, .. }) | State::Signaled(Signaled { watched, .. }) => {
+        if let Err(err) = watched.forward(stream) {
+          warn!("failed to forward stdio stream output: {err:#}");
+        }
+      },
+      State::BackingOff(_) => (),
+      State::Undefined => unreachable!(),
+    }
+  }
+
+  fn take_poll_data(&mut self) -> Option<PollData> {
+    match &mut self.state {
+      State::Running(Running { watched, .. }) | State::Signaled(Signaled { watched, .. }) => {
+        watched.take_poll_data()
+      },
+      State::BackingOff(_) => None,
+      State::Undefined => unreachable!(),
+    }
+  }
 }
 
 
@@ -440,8 +469,49 @@ fn run(mut watchdog: Watchdog<'_>) {
   forget(sigint_events);
   forget(sigchld_events);
 
+  let mut stdout_token = Token(3);
+  let mut stderr_token = Token(4);
+  let mut next_token = 5;
+  let mut poll_data = Option::<PollData>::None;
+
   let mut timeout = None;
   loop {
+    if let Some(mut new_poll_data) = watchdog.take_poll_data() {
+      if let Some(mut poll_data) = poll_data {
+        if let Some(stdout) = &mut poll_data.stdout {
+          let _result = poll.registry().deregister(stdout);
+        }
+
+        if let Some(stderr) = &mut poll_data.stderr {
+          let _result = poll.registry().deregister(stderr);
+        }
+      }
+
+      // We always make sure to create a new token as a safety
+      // precaution
+      stdout_token = Token(next_token);
+      // TODO: Strictly speaking we should use wrapping arithmetic here,
+      //       but then we'd also need to make sure to never include the
+      //       fixed first three tokens.
+      next_token += 1;
+      stderr_token = Token(next_token);
+      next_token += 1;
+
+      if let Some(stdout) = &mut new_poll_data.stdout {
+        let () = poll
+          .registry()
+          .register(stdout, stdout_token, Interest::READABLE)
+          .expect("failed to register poll for stdout");
+      }
+      if let Some(stderr) = &mut new_poll_data.stderr {
+        let () = poll
+          .registry()
+          .register(stderr, stderr_token, Interest::READABLE)
+          .expect("failed to register poll for stderr");
+      }
+      poll_data = Some(new_poll_data);
+    }
+
     match poll.poll(&mut events, timeout) {
       Ok(()) => {
         let mut action = Action::Poll(None);
@@ -456,7 +526,17 @@ fn run(mut watchdog: Watchdog<'_>) {
             token if token == sigchld_token => {
               action |= watchdog.on_sigchld();
             },
-            _ => unreachable!(),
+            token if token == stdout_token => {
+              if let Some(stdout) = poll_data.as_mut().and_then(|data| data.stdout.as_mut()) {
+                let () = watchdog.on_stream_ready(stdout);
+              }
+            },
+            token if token == stderr_token => {
+              if let Some(stderr) = poll_data.as_mut().and_then(|data| data.stderr.as_mut()) {
+                let () = watchdog.on_stream_ready(stderr);
+              }
+            },
+            token => debug!("received event on unexpected token: {token:?}"),
           }
         }
 
