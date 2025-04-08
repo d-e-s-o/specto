@@ -9,6 +9,7 @@ use std::time::Duration;
 use anyhow::anyhow;
 use anyhow::Error;
 
+use clap::ArgAction;
 use clap::Parser;
 
 use crate::watched::Streams;
@@ -95,6 +96,9 @@ pub(crate) struct Args {
   /// keep.
   #[arg(long = "max-log-files", requires = "log_file")]
   pub max_log_files: Option<usize>,
+  /// Increase verbosity (can be supplied multiple times).
+  #[clap(short = 'v', long = "verbose", global = true, action = ArgAction::Count)]
+  pub verbosity: u8,
 }
 
 

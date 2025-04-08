@@ -1,10 +1,13 @@
 // Copyright (C) 2018-2025 Daniel Mueller <deso@posteo.net>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#![allow(clippy::let_and_return)]
+
 //! A watchdog for starting and restarting another program.
 
 mod args;
 mod backoff;
+mod logger;
 mod rotate;
 mod signal;
 mod util;
@@ -27,8 +30,6 @@ use anyhow::Result;
 
 use clap::Parser as _;
 
-use env_logger::init as init_log;
-
 use log::debug;
 use log::error;
 use log::warn;
@@ -41,6 +42,7 @@ use mio::Token;
 
 use crate::args::Args;
 use crate::backoff::Backoff;
+use crate::logger::init_logging;
 use crate::signal::sigchld_events;
 use crate::signal::sigint_events;
 use crate::signal::sigterm_events;
@@ -561,8 +563,8 @@ fn run(mut watchdog: Watchdog<'_>) {
 }
 
 fn main() -> Result<()> {
-  let () = init_log();
   let args = Args::parse();
+  let () = init_logging(args.verbosity);
   let mut backoff = Backoff::new(args.backoff_base, args.backoff_multiplier, args.backoff_max);
   let watchdog = Watchdog::start(&args, &mut backoff)?;
 
