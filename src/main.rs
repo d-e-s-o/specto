@@ -43,10 +43,12 @@ use mio::Token;
 use crate::args::Args;
 use crate::backoff::Backoff;
 use crate::logger::init_logging;
+use crate::rotate::Rotate;
 use crate::signal::sigchld_events;
 use crate::signal::sigint_events;
 use crate::signal::sigterm_events;
 use crate::watched::PollData;
+use crate::watched::Streams;
 use crate::watched::Watched;
 
 
@@ -195,14 +197,16 @@ struct Watchdog<'args> {
   args: &'args Args,
   backoff: &'args mut Backoff,
   state: State,
+  rotate: Option<Rotate>,
 }
 
 impl<'args> Watchdog<'args> {
-  fn start(args: &'args Args, backoff: &'args mut Backoff) -> Result<Self> {
+  fn start(args: &'args Args, backoff: &'args mut Backoff, rotate: Option<Rotate>) -> Result<Self> {
     let slf = Self {
       args,
       backoff,
       state: State::Running(Self::launch(args)?),
+      rotate,
     };
     Ok(slf)
   }
@@ -242,10 +246,12 @@ impl<'args> Watchdog<'args> {
 
     let spawned = Instant::now();
     let watched = Watched::builder()
-      .set_log_file(args.log_file.as_deref())
-      .set_log_streams(args.log_streams)
-      .set_max_log_lines(args.max_log_lines)
-      .set_max_log_files(args.max_log_files)
+      .set_log_streams(
+        args
+          .log_file
+          .as_ref()
+          .map(|_| args.log_streams.unwrap_or(Streams::Both)),
+      )
       .build(&args.command, &args.arguments)
       .with_context(|| format!("failed to execute `{formatted}`"))?;
     let running = Running { spawned, watched };
@@ -416,14 +422,15 @@ impl<'args> Watchdog<'args> {
   }
 
   fn on_stream_ready(&mut self, stream: &mut Receiver) {
-    match &mut self.state {
-      State::Running(Running { watched, .. }) | State::Signaled(Signaled { watched, .. }) => {
-        if let Err(err) = watched.forward(stream) {
-          warn!("failed to forward stdio stream output: {err:#}");
-        }
-      },
-      State::BackingOff(_) => (),
-      State::Undefined => unreachable!(),
+    if let Some(rotate) = &mut self.rotate {
+      if let Err(err) = rotate.forward(stream) {
+        warn!("failed to forward stdio stream output: {err:#}");
+      }
+    } else {
+      debug_assert!(
+        false,
+        "encountered stream ready event when no streams should be forwarded"
+      );
     }
   }
 
@@ -566,7 +573,16 @@ fn main() -> Result<()> {
   let args = Args::parse();
   let () = init_logging(args.verbosity);
   let mut backoff = Backoff::new(args.backoff_base, args.backoff_multiplier, args.backoff_max);
-  let watchdog = Watchdog::start(&args, &mut backoff)?;
+  let rotate = if let Some(log_file) = &args.log_file {
+    let rotate = Rotate::builder()
+      .set_max_lines(args.max_log_lines)
+      .set_max_files(args.max_log_files)
+      .build(log_file)?;
+    Some(rotate)
+  } else {
+    None
+  };
+  let watchdog = Watchdog::start(&args, &mut backoff, rotate)?;
 
   let () = run(watchdog);
   Ok(())

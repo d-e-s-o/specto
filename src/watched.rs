@@ -7,7 +7,6 @@ use std::io::ErrorKind;
 use std::os::fd::FromRawFd as _;
 use std::os::fd::IntoRawFd as _;
 use std::path::Path;
-use std::path::PathBuf;
 use std::process::Child;
 use std::process::Command;
 use std::process::ExitStatus;
@@ -22,7 +21,6 @@ use libc::SIGTERM;
 use mio::unix::pipe;
 use mio::unix::pipe::Receiver;
 
-use crate::rotate::Rotate;
 use crate::util::check;
 
 
@@ -39,45 +37,17 @@ pub(crate) enum Streams {
 
 #[derive(Debug, Default)]
 pub(crate) struct Builder {
-  log_file: Option<PathBuf>,
   log_streams: Option<Streams>,
-  max_log_lines: Option<usize>,
-  max_log_files: Option<usize>,
 }
 
 impl Builder {
-  pub fn set_log_file<P>(mut self, log_file: Option<P>) -> Self
-  where
-    P: AsRef<Path>,
-  {
-    self.log_file = log_file.map(|path| path.as_ref().to_path_buf());
-    self
-  }
-
   pub fn set_log_streams(mut self, log_streams: Option<Streams>) -> Self {
     self.log_streams = log_streams;
     self
   }
 
-  pub fn set_max_log_lines(mut self, max_log_lines: Option<usize>) -> Self {
-    assert_ne!(max_log_lines, Some(0));
-    self.max_log_lines = max_log_lines;
-    self
-  }
-
-  pub fn set_max_log_files(mut self, max_log_files: Option<usize>) -> Self {
-    assert_ne!(max_log_files, Some(0));
-    self.max_log_files = max_log_files;
-    self
-  }
-
   pub fn build(self, command: &Path, arguments: &[OsString]) -> Result<Watched> {
-    let Self {
-      log_file,
-      log_streams,
-      max_log_lines,
-      max_log_files,
-    } = self;
+    let Self { log_streams } = self;
 
     // A watchdog is for running non-interactive programs, so we close
     // stdin.
@@ -88,13 +58,7 @@ impl Builder {
       .stdout(Stdio::inherit())
       .stdout(Stdio::inherit());
 
-    let (rotate, stdout, stderr) = if let Some(log_file) = log_file {
-      let rotate = Rotate::builder()
-        .set_max_lines(max_log_lines)
-        .set_max_files(max_log_files)
-        .build(log_file)?;
-
-      let log_streams = log_streams.unwrap_or(Streams::Both);
+    let (stdout, stderr) = if let Some(log_streams) = log_streams {
       let stdout = matches!(log_streams, Streams::Stdout | Streams::Both);
       let stderr = matches!(log_streams, Streams::Stderr | Streams::Both);
 
@@ -116,9 +80,9 @@ impl Builder {
         None
       };
 
-      (Some(rotate), stdout_source, stderr_source)
+      (stdout_source, stderr_source)
     } else {
-      (None, None, None)
+      (None, None)
     };
 
     let child = command.spawn().with_context(|| "failed to spawn child")?;
@@ -128,11 +92,7 @@ impl Builder {
       Some(PollData { stdout, stderr })
     };
 
-    let slf = Watched {
-      child,
-      rotate,
-      poll_data,
-    };
+    let slf = Watched { child, poll_data };
     Ok(slf)
   }
 }
@@ -149,7 +109,6 @@ pub(crate) struct PollData {
 #[derive(Debug)]
 pub(crate) struct Watched {
   child: Child,
-  rotate: Option<Rotate>,
   poll_data: Option<PollData>,
 }
 
@@ -185,14 +144,6 @@ impl Watched {
 
   pub fn kill(mut self) -> io::Result<()> {
     self.child.kill()
-  }
-
-  /// Forward data from a stream to the file rotation facility.
-  pub fn forward(&mut self, stream: &mut Receiver) -> Result<()> {
-    match &mut self.rotate {
-      Some(rotate) => rotate.forward(stream),
-      None => Ok(()),
-    }
   }
 
   /// Take the [`PollData`] associated with this object.
