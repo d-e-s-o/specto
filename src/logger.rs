@@ -5,7 +5,11 @@ use std::io;
 use std::io::stderr;
 use std::io::Write as _;
 use std::mem::MaybeUninit;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::SystemTime;
+
+use anyhow::Result;
 
 use bufio::Writer as StackWriter;
 
@@ -18,6 +22,8 @@ use log::Metadata;
 use log::Record;
 
 use jiff::Timestamp;
+
+use crate::rotate::Rotate;
 
 const RESET: &str = "\x1b[0m";
 const GREEN_S: &str = "\x1b[32m";
@@ -45,7 +51,13 @@ macro_rules! write {
 
 
 #[derive(Debug)]
-struct Logger;
+struct Logger {
+  // TODO: It is extremely unfortunately that `log::Log` requires us to
+  //       be `Send` + `Sync`. We could consider rolling our own logging
+  //       infrastructure to make do with lighter weight mechanisms for
+  //       sharing.
+  rotate: Option<Arc<Mutex<Rotate>>>,
+}
 
 impl Log for Logger {
   fn enabled(&self, metadata: &Metadata) -> bool {
@@ -53,7 +65,7 @@ impl Log for Logger {
   }
 
   fn log(&self, record: &Record) {
-    fn log_impl(record: &Record) -> io::Result<()> {
+    fn log_impl(logger: &Logger, record: &Record) -> Result<()> {
       // We effectively buffer every log line here while capping line
       // length at a fixed upper limit. In many ways that just simulates
       // a `BufReader`, but we don't heap allocate. Buffering is useful,
@@ -75,18 +87,25 @@ impl Log for Logger {
       }?;
 
       let () = write!(&mut writer, " {}] {}", record.target(), record.args())?;
-      let mut stderr = stderr().lock();
-      let () = stderr.write_all(writer.written())?;
-      // We exclude the newline from the write! machinery and have it
-      // here unconditionally just in case we experience short writes
-      // due to our limited size buffer.
-      let () = stderr.write_all(b"\n")?;
+
+      if let Some(rotate) = &logger.rotate {
+        let mut rotate = rotate.lock().unwrap_or_else(|err| err.into_inner());
+        let () = rotate.forward(&mut writer.written())?;
+        let () = rotate.forward(&mut b"\n".as_slice())?;
+      } else {
+        let mut stderr = stderr().lock();
+        let () = stderr.write_all(writer.written())?;
+        // We exclude the newline from the write! machinery and have it
+        // here unconditionally just in case we experience short writes
+        // due to our limited size buffer.
+        let () = stderr.write_all(b"\n")?;
+      }
       Ok(())
     }
 
     #[allow(clippy::collapsible_if)]
     if self.enabled(record.metadata()) {
-      if let Err(err) = log_impl(record) {
+      if let Err(err) = log_impl(self, record) {
         eprintln!("failed to format and/or write log line: {err}")
       }
     }
@@ -98,7 +117,7 @@ impl Log for Logger {
 
 /// Initialize the logging subsystem with the given abstract notion of
 /// verbosity (higher values equate to higher verbosity).
-pub(crate) fn init_logging(verbosity: u8) {
+pub(crate) fn init_logging(verbosity: u8, rotate: Option<Arc<Mutex<Rotate>>>) {
   let level = match verbosity {
     0 => Level::Warn,
     1 => Level::Info,
@@ -107,7 +126,8 @@ pub(crate) fn init_logging(verbosity: u8) {
   };
 
   let () = set_max_level(level.to_level_filter());
-  let () = set_logger(&Logger).expect("failed to register logger");
+  let logger = Logger { rotate };
+  let () = set_logger(Box::leak(Box::new(logger))).expect("failed to register logger");
 }
 
 

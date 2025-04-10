@@ -22,6 +22,8 @@ use std::ops::BitOrAssign;
 use std::ops::Deref as _;
 use std::os::unix::process::ExitStatusExt;
 use std::process::ExitStatus;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -197,11 +199,15 @@ struct Watchdog<'args> {
   args: &'args Args,
   backoff: &'args mut Backoff,
   state: State,
-  rotate: Option<Rotate>,
+  rotate: Option<Arc<Mutex<Rotate>>>,
 }
 
 impl<'args> Watchdog<'args> {
-  fn start(args: &'args Args, backoff: &'args mut Backoff, rotate: Option<Rotate>) -> Result<Self> {
+  fn start(
+    args: &'args Args,
+    backoff: &'args mut Backoff,
+    rotate: Option<Arc<Mutex<Rotate>>>,
+  ) -> Result<Self> {
     let slf = Self {
       args,
       backoff,
@@ -423,7 +429,11 @@ impl<'args> Watchdog<'args> {
 
   fn on_stream_ready(&mut self, stream: &mut Receiver) {
     if let Some(rotate) = &mut self.rotate {
-      if let Err(err) = rotate.forward(stream) {
+      let result = rotate
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .forward(stream);
+      if let Err(err) = result {
         warn!("failed to forward stdio stream output: {err:#}");
       }
     } else {
@@ -571,17 +581,17 @@ fn run(mut watchdog: Watchdog<'_>) {
 
 fn main() -> Result<()> {
   let args = Args::parse();
-  let () = init_logging(args.verbosity);
-  let mut backoff = Backoff::new(args.backoff_base, args.backoff_multiplier, args.backoff_max);
   let rotate = if let Some(log_file) = &args.log_file {
     let rotate = Rotate::builder()
       .set_max_lines(args.max_log_lines)
       .set_max_files(args.max_log_files)
       .build(log_file)?;
-    Some(rotate)
+    Some(Arc::new(Mutex::new(rotate)))
   } else {
     None
   };
+  let () = init_logging(args.verbosity, rotate.as_ref().map(Arc::clone));
+  let mut backoff = Backoff::new(args.backoff_base, args.backoff_multiplier, args.backoff_max);
   let watchdog = Watchdog::start(&args, &mut backoff, rotate)?;
 
   let () = run(watchdog);
