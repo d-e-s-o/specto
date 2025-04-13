@@ -1,5 +1,5 @@
 [package]
-name = "watchdog"
+name = "specto"
 version = "0.1.0"
 authors = ["Daniel Mueller <deso@posteo.net>"]
 edition = "2024"
