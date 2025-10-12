@@ -75,8 +75,7 @@ impl Log for Logger {
       let mut buffer = [MaybeUninit::<u8>::uninit(); 256];
       let mut writer = StackWriter::new(&mut buffer);
 
-      let time = Timestamp::try_from(SystemTime::now())
-        .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+      let time = Timestamp::try_from(SystemTime::now()).map_err(io::Error::other)?;
       let () = write!(&mut writer, "[{time:.3} ")?;
 
       let () = match record.level() {

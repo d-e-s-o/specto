@@ -33,7 +33,7 @@ fn parse_duration(s: &str) -> Result<Duration, Error> {
     }
   }
 
-  Err(anyhow!("invalid duration provided: {}", s))
+  Err(anyhow!("invalid duration provided: {s}"))
 }
 
 
