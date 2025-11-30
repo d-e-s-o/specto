@@ -66,35 +66,35 @@ pub(crate) struct Args {
   ///
   /// Accepted suffixes are 'ms' for milliseconds, 's' for seconds, and
   /// 'm' for minutes.
-  #[arg(long = "backoff-base", value_parser = parse_duration, default_value = "1s")]
+  #[clap(long = "backoff-base", value_parser = parse_duration, default_value = "1s")]
   pub backoff_base: Duration,
   /// The factor to multiply the current backoff with to get the next
   /// backoff.
-  #[arg(long = "backoff-multiplier", default_value = "2.0")]
+  #[clap(long = "backoff-multiplier", default_value = "2.0")]
   pub backoff_multiplier: f64,
   /// The maximum backoff to use.
   ///
   /// Accepted suffixes are 'ms' for milliseconds, 's' for seconds, and
   /// 'm' for minutes.
-  #[arg(long = "backoff-max", value_parser = parse_duration, default_value = "30s")]
+  #[clap(long = "backoff-max", value_parser = parse_duration, default_value = "30s")]
   pub backoff_max: Duration,
   /// The log file to redirect the watched process' output to.
   ///
   /// Setting this option also enables log rotation.
-  #[arg(long = "log-file")]
+  #[clap(long = "log-file")]
   pub log_file: Option<PathBuf>,
   /// The file to redirect the watched process' stderr to.
   ///
   /// Setting this option also enables log rotation.
-  #[arg(long = "log-streams", requires = "log_file")]
+  #[clap(long = "log-streams", requires = "log_file")]
   pub log_streams: Option<Streams>,
   /// The approximate maximum number of lines in a log file before
   /// rotation happens.
-  #[arg(long = "max-log-lines", requires = "log_file")]
+  #[clap(long = "max-log-lines", requires = "log_file")]
   pub max_log_lines: Option<usize>,
   /// The maximum total number of log files (current and "archived") to
   /// keep.
-  #[arg(long = "max-log-files", requires = "log_file")]
+  #[clap(long = "max-log-files", requires = "log_file")]
   pub max_log_files: Option<usize>,
   /// Increase verbosity (can be supplied multiple times).
   #[clap(short = 'v', long = "verbose", global = true, action = ArgAction::Count)]
